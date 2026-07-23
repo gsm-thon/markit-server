@@ -1,10 +1,12 @@
-import express from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env";
 import { scansRouter } from "./routes/scans.routes";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.middleware";
+import { openApiSpec } from "./openapi";
 
 export function createApp() {
   const app = express();
@@ -24,6 +26,16 @@ export function createApp() {
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });
+
+  app.use(
+    "/api-docs",
+    (_req: Request, res: Response, next: NextFunction) => {
+      res.removeHeader("Content-Security-Policy");
+      next();
+    },
+    swaggerUi.serve,
+    swaggerUi.setup(openApiSpec)
+  );
 
   app.use("/api/v1", scansRouter);
 
