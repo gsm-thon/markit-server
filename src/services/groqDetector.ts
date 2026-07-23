@@ -121,22 +121,44 @@ export async function detectWithGroq(text: string, mode: ScanMode): Promise<RawF
   }
 
   const findings: RawFinding[] = [];
-  for (const item of parsed.findings ?? []) {
-    const startOffset = text.indexOf(item.matchedText);
-    if (startOffset === -1) continue; // 모델이 원문에 없는 텍스트를 반환한 경우 offset 계산 불가 -> 스킵
+  const seenOffsets = new Set<string>();
 
-    findings.push({
-      type: item.type,
-      label: item.label,
-      originalText: item.matchedText,
-      reason: item.reason,
-      severity: item.severity,
-      action: item.action,
-      suggestion: item.suggestion ?? null,
-      startOffset,
-      endOffset: startOffset + item.matchedText.length,
-    });
+  for (const item of parsed.findings ?? []) {
+    if (!item.matchedText) continue;
+
+    for (const startOffset of findAllOccurrences(text, item.matchedText)) {
+      const endOffset = startOffset + item.matchedText.length;
+      const dedupeKey = `${item.type}:${startOffset}:${endOffset}`;
+      if (seenOffsets.has(dedupeKey)) continue; // LLM이 같은 문구를 여러 항목으로 중복 보고한 경우 방지
+      seenOffsets.add(dedupeKey);
+
+      findings.push({
+        type: item.type,
+        label: item.label,
+        originalText: item.matchedText,
+        reason: item.reason,
+        severity: item.severity,
+        action: item.action,
+        suggestion: item.suggestion ?? null,
+        startOffset,
+        endOffset,
+      });
+    }
   }
 
   return findings;
+}
+
+// LLM은 반복되는 문구(예: 같은 이름이 문서에 여러 번 등장)를 한 항목으로만 보고하는 경우가 많아,
+// 실제로는 원문 전체에서 동일 문자열의 모든 위치를 찾아 각각 별도 finding으로 만들어야 전부 마스킹된다.
+function findAllOccurrences(haystack: string, needle: string): number[] {
+  const positions: number[] = [];
+  let fromIndex = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, fromIndex);
+    if (idx === -1) break;
+    positions.push(idx);
+    fromIndex = idx + needle.length;
+  }
+  return positions;
 }
