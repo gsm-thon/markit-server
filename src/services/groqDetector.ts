@@ -3,17 +3,43 @@ import { ApiException } from "../utils/apiException";
 import type { RawFinding } from "./regexDetectors";
 import type { ScanMode } from "../types/scan.types";
 
+const PERSONA: Record<ScanMode, string> = {
+  privacy: "당신은 개인정보 보호 전문 AI 탐지 엔진입니다. 사용자가 제공한 문서에서 민감한 개인정보를 찾아내어 유출을 방지하는 것이 임무입니다.",
+  blind_hiring:
+    "당신은 블라인드 채용 심사를 위한 문서 검열 AI입니다. 입사지원서, 자기소개서, 경력기술서에서 블라인드 채용 원칙을 위반하는 표현을 찾아내는 것이 임무입니다.",
+};
+
 const CATEGORY_GUIDE: Record<ScanMode, string> = {
-  privacy: `- name: 이름 (다른 개인정보와 결합되어 식별 가능한 경우)
-- address: 주소, 거주지 정보
-- birth_date: 생년월일
-- family_member: 가족 구성원의 실명이 언급된 경우`,
-  blind_hiring: `- school_name: 학교명 (출신 학교를 알 수 있는 표현 포함)
-- family_background: 가족관계, 부모 직업 등 가정 배경
-- age: 나이, 생년, 출생년도로 나이를 유추할 수 있는 표현
-- appearance: 외모, 신체 조건에 대한 언급
-- hometown: 출신 지역
-- gender_marital: 성별, 결혼/혼인 여부`,
+  privacy: `- name: 문맥상 실제 사람의 이름으로 판단되는 표현
+- address: 도로명주소, 지번주소 등 구체적인 거주지 정보
+- birth_date: 출생연도, 생일, 만 나이 등 특정인의 생년월일·연령을 유추할 수 있는 정보
+- family_member: 가족 구성원의 실명이 언급된 경우
+- affiliation: 특정 개인을 식별할 수 있는 회사명+부서+직급 조합
+- vehicle: 차량 번호판 형식 (예: 12가3456)
+- account: 계좌번호 (10~14자리 은행 계좌번호 형식)
+- passport: 여권번호 (영문 1~2자리 + 숫자 7~8자리)
+- license: 운전면허번호 (지역코드 2자리-숫자 6자리-숫자 2자리)
+- health: 질병명, 진단 내역, 투약 정보 등 건강/병력 정보
+- financial: 카드번호 등 금융정보
+- credential: 비밀번호, PIN, OTP 등 인증정보
+
+주의: 전화번호, 이메일, 주민등록번호, 학번은 별도 정규식 필터가 이미 처리하므로 중복 탐지하지 마세요.
+공공기관명, 브랜드명, 지명 등 개인 식별과 무관한 고유명사는 탐지하지 마세요.`,
+  blind_hiring: `1. name: 성명 기재란 외 본문에 이름이 등장하는 경우 (예: "동아리 살림꾼 '홍길동'")
+2. hometown: 출신지역을 직·간접적으로 유추할 수 있는 표현 (예: "우리나라 수도에서 태어나 쭉 자라왔으며")
+3. family_background: 부모 직업, 형제 정보, 혼인 여부 등 가족관계 (예: "교직생활을 하시는 부모님 아래에서")
+4. age: 나이, 생년, 특정 연도 사건과 연결지어 나이를 유추할 수 있는 표현 (예: "88년 올림픽이 개최된 해에 태어나")
+5. gender_marital: 성별, 혼인 여부를 유추할 수 있는 표현 (예: "군대 의무 복무 시절", "결혼 후 남편과 함께", "OO여대를 졸업하고", "장남으로서")
+6. school_name: 학교명(국내외)을 직·간접적으로 유추할 수 있는 표현 — 학교 이메일, 영문 약어, 고유 프로그램명 포함 (예: "서울대총장상을 수상", "SNU 창업동아리")
+7. religion: 특정 종교나 종교 활동 언급 (예: "교회 봉사활동을 10년간")
+8. politics: 정당, 정치 성향, 정치 활동 언급
+9. disability: 장애 관련 언급 (단, 직무 수행에 명백히 필요한 경우는 제외)
+10. appearance: 키, 몸무게, 외모 등 신체적 특징 묘사
+
+중요 원칙:
+- 위 예시 외에도 직·간접적으로 개인적 사항을 유추할 수 있는 모든 표현이 대상입니다.
+- "OO대학 연구소에서"처럼 이미 블라인드 처리된 표현은 위반이 아닙니다.
+- 직무 관련 자격증, 업무 경험, 프로젝트 성과 등은 탐지하지 마세요.`,
 };
 
 interface GroqRawItem {
@@ -27,16 +53,20 @@ interface GroqRawItem {
 }
 
 function buildPrompt(text: string, mode: ScanMode): string {
-  return `당신은 한국어 문서에서 민감 정보를 탐지하는 도우미입니다.
-아래 "탐지 카테고리"에 해당하는 문구를 문서에서 찾아 JSON으로만 응답하세요.
+  return `${PERSONA[mode]}
+아래 "탐지 대상"에 해당하는 문구를 문서에서 찾아 JSON으로만 응답하세요.
 
-탐지 카테고리 (${mode} 모드):
+[탐지 대상]
 ${CATEGORY_GUIDE[mode]}
 
 응답은 반드시 다음 형태의 JSON 객체 하나로만 반환하세요:
 {"findings": [ { "type": "...", "label": "...", "matchedText": "...", "reason": "...", "severity": "low|medium|high", "action": "mask|replace|delete|review", "suggestion": "..." | null } ]}
 
 - matchedText는 문서에서 그대로 발췌한 원문이어야 하며, 반드시 원문에 실제로 존재하는 부분 문자열이어야 합니다.
+- label은 type을 설명하는 짧은 한글 표시명입니다 (예: "학교명", "생년월일").
+- 얼마나 확실한 탐지인지 severity로 표현하세요: 명백한 위반/노출은 "high", 문맥상 유추 가능한 수준은 "medium", 확신이 낮지만 후보로는 알려야 하는 경우는 "low"로 설정하세요. 확신이 낮다고 후보에서 누락하지 말고, 대신 severity를 "low", action을 "review"로 설정해 사람이 검토하도록 하세요.
+- action이 "replace"인 경우에만 suggestion을 채우세요. suggestion은 matchedText 자리에 그대로 끼워 넣어도 문장이 자연스럽게 이어지는 "실제 대체 문구"여야 합니다 (예: "컴퓨터공학 관련 전공"). "~을 삭제하세요", "~을 지우세요" 같은 지시문이나 설명은 절대 넣지 마세요.
+- action이 "mask", "delete", "review"인 경우 suggestion은 반드시 null로 두세요.
 - 해당 사항이 없으면 {"findings": []} 를 반환하세요.
 
 문서:

@@ -12,7 +12,8 @@ export function buildMaskedText(session: ScanSession): string {
 
   let result = session.extractedText;
   for (const finding of resolvedFindings) {
-    const replacement = finding.action === "delete" ? "" : finding.replacementText ?? finding.suggestion ?? "[가림]";
+    const fallback = finding.action === "replace" ? finding.suggestion : null;
+    const replacement = finding.action === "delete" ? "" : finding.replacementText ?? fallback ?? "[가림]";
     result = result.slice(0, finding.startOffset) + replacement + result.slice(finding.endOffset);
   }
   return result;

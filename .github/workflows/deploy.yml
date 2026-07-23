@@ -20,7 +20,7 @@ jobs:
         run: |
           ssh-keyscan -H "${{ secrets.BASTION_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Clone/pull code and sync .env on web server (via bastion)
+      - name: Deploy (clone/pull, sync .env, build, pm2 restart) on web server (via bastion)
         env:
           BASTION_HOST: ${{ secrets.BASTION_HOST }}
           BASTION_USER: ${{ secrets.BASTION_USER }}
@@ -29,7 +29,8 @@ jobs:
           WEBSERVER_KEY_PATH: ${{ secrets.WEBSERVER_KEY_PATH }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          DEPLOY_SCRIPT='REPO_DIR=~/markit-server
+          DEPLOY_SCRIPT='set -e
+          REPO_DIR=~/markit-server
           if [ -d "$REPO_DIR/.git" ]; then
             cd "$REPO_DIR" && git pull origin main
           else
@@ -41,7 +42,18 @@ jobs:
             sed -i "s|^GROQ_API_KEY=.*|GROQ_API_KEY=__GROQ_API_KEY__|" .env
           else
             echo "GROQ_API_KEY=__GROQ_API_KEY__" >> .env
-          fi'
+          fi
+          npm ci
+          npm run build
+          if npx pm2 describe maskit-api > /dev/null 2>&1; then
+            npx pm2 restart maskit-api --update-env
+          else
+            npx pm2 start dist/index.js --name maskit-api
+          fi
+          npx pm2 save
+          sleep 2
+          APP_PORT=$(grep "^PORT=" .env | cut -d= -f2)
+          curl -sf "http://localhost:${APP_PORT:-3000}/health"'
 
           # 플레이스홀더를 실제 값으로 치환 (bash 파라미터 치환은 쉘 재해석 없이 순수 문자열 대입이라 키 값에 특수문자가 있어도 안전함)
           DEPLOY_SCRIPT="${DEPLOY_SCRIPT//__GROQ_API_KEY__/$GROQ_API_KEY}"
