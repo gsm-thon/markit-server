@@ -20,13 +20,14 @@ jobs:
         run: |
           ssh-keyscan -H "${{ secrets.BASTION_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy (clone/pull, sync .env, build, pm2 restart) on web server (via bastion)
+      - name: Deploy (clone/pull, sync .env, build, pm2 restart) on both web servers (via bastion)
         env:
           BASTION_HOST: ${{ secrets.BASTION_HOST }}
           BASTION_USER: ${{ secrets.BASTION_USER }}
-          WEBSERVER_HOST: ${{ secrets.WEBSERVER_HOST }}
           WEBSERVER_USER: ${{ secrets.WEBSERVER_USER }}
           WEBSERVER_KEY_PATH: ${{ secrets.WEBSERVER_KEY_PATH }}
+          WEBSERVER_HOST_1: ${{ secrets.WEBSERVER_HOST }}
+          WEBSERVER_HOST_2: ${{ secrets.WEBSERVER_2_HOST }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           DEPLOY_SCRIPT='set -e
@@ -60,5 +61,8 @@ jobs:
 
           ENCODED=$(printf '%s' "$DEPLOY_SCRIPT" | base64 | tr -d '\n')
 
-          ssh -i ~/.ssh/bastion_key "$BASTION_USER@$BASTION_HOST" \
-            "echo $ENCODED | base64 -d | ssh -i $WEBSERVER_KEY_PATH -o StrictHostKeyChecking=accept-new $WEBSERVER_USER@$WEBSERVER_HOST bash"
+          for TARGET_HOST in "$WEBSERVER_HOST_1" "$WEBSERVER_HOST_2"; do
+            echo "=== Deploying to $TARGET_HOST ==="
+            ssh -i ~/.ssh/bastion_key "$BASTION_USER@$BASTION_HOST" \
+              "echo $ENCODED | base64 -d | ssh -i $WEBSERVER_KEY_PATH -o StrictHostKeyChecking=accept-new $WEBSERVER_USER@$TARGET_HOST bash"
+          done
