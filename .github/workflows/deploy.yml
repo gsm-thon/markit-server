@@ -9,47 +9,33 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up SSH keys
+      - name: Set up bastion SSH key
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.BASTION_SSH_KEY }}" > ~/.ssh/bastion_key
-          printf '%s\n' "${{ secrets.WEBSERVER_SSH_KEY }}" > ~/.ssh/webserver_key
-          chmod 600 ~/.ssh/bastion_key ~/.ssh/webserver_key
+          chmod 600 ~/.ssh/bastion_key
 
-      - name: Trust bastion and webserver host keys
+      - name: Trust bastion host key
         run: |
           ssh-keyscan -H "${{ secrets.BASTION_HOST }}" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/bastion_key \
-              -o UserKnownHostsFile=~/.ssh/known_hosts \
-              -o StrictHostKeyChecking=accept-new \
-              "${{ secrets.BASTION_USER }}@${{ secrets.BASTION_HOST }}" \
-              "ssh-keyscan -H ${{ secrets.WEBSERVER_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Write SSH config (bastion ProxyJump)
+      - name: Clone or pull latest code on web server (via bastion)
+        env:
+          BASTION_HOST: ${{ secrets.BASTION_HOST }}
+          BASTION_USER: ${{ secrets.BASTION_USER }}
+          WEBSERVER_HOST: ${{ secrets.WEBSERVER_HOST }}
+          WEBSERVER_USER: ${{ secrets.WEBSERVER_USER }}
+          WEBSERVER_KEY_PATH: ${{ secrets.WEBSERVER_KEY_PATH }}
         run: |
-          cat >> ~/.ssh/config <<EOF
-          Host bastion
-            HostName ${{ secrets.BASTION_HOST }}
-            User ${{ secrets.BASTION_USER }}
-            IdentityFile ~/.ssh/bastion_key
+          DEPLOY_SCRIPT='REPO_DIR=~/markit-server
+          if [ -d "$REPO_DIR/.git" ]; then
+            cd "$REPO_DIR" && git pull origin main
+          else
+            git clone --branch main https://github.com/gsm-thon/markit-server.git "$REPO_DIR"
+          fi'
 
-          Host webserver
-            HostName ${{ secrets.WEBSERVER_HOST }}
-            User ${{ secrets.WEBSERVER_USER }}
-            IdentityFile ~/.ssh/webserver_key
-            ProxyJump bastion
-          EOF
-          chmod 600 ~/.ssh/config
+          ENCODED=$(printf '%s' "$DEPLOY_SCRIPT" | base64 | tr -d '\n')
 
-      - name: Clone or pull latest code on web server
-        run: |
-          ssh webserver '
-            set -e
-            REPO_DIR=~/markit-server
-            if [ -d "$REPO_DIR/.git" ]; then
-              cd "$REPO_DIR" && git pull origin main
-            else
-              git clone --branch main https://github.com/gsm-thon/markit-server.git "$REPO_DIR"
-            fi
-          '
+          ssh -i ~/.ssh/bastion_key "$BASTION_USER@$BASTION_HOST" \
+            "echo $ENCODED | base64 -d | ssh -i $WEBSERVER_KEY_PATH -o StrictHostKeyChecking=accept-new $WEBSERVER_USER@$WEBSERVER_HOST bash"
