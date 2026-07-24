@@ -110,6 +110,18 @@ async function callGroqWithRetry(prompt: string): Promise<Response> {
       }),
     });
 
+    if (response.status === 429) {
+      console.warn("Groq 429 rate limit headers:", {
+        "retry-after": response.headers.get("retry-after"),
+        "x-ratelimit-limit-requests": response.headers.get("x-ratelimit-limit-requests"),
+        "x-ratelimit-remaining-requests": response.headers.get("x-ratelimit-remaining-requests"),
+        "x-ratelimit-reset-requests": response.headers.get("x-ratelimit-reset-requests"),
+        "x-ratelimit-limit-tokens": response.headers.get("x-ratelimit-limit-tokens"),
+        "x-ratelimit-remaining-tokens": response.headers.get("x-ratelimit-remaining-tokens"),
+        "x-ratelimit-reset-tokens": response.headers.get("x-ratelimit-reset-tokens"),
+      });
+    }
+
     if (response.status !== 429 || attempt === MAX_RATE_LIMIT_RETRIES) {
       return response;
     }
