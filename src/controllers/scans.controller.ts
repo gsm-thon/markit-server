@@ -1,10 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import { extractText } from "../services/textExtraction.service";
 import { analyzeText } from "../services/detection.service";
-import { createSession, getSession, deleteSession } from "../services/scanStore.service";
+import { createSession, getSession, updateFinding as updateFindingInStore, deleteSession } from "../services/scanStore.service";
 import { buildMaskedText, generateTxtCopy, generatePdfCopy, generateDocxCopy } from "../services/masking.service";
 import { ApiException } from "../utils/apiException";
-import type { ScanMode } from "../types/scan.types";
+import type { ScanMode, FindingAction } from "../types/scan.types";
 
 const VALID_MODES: ScanMode[] = ["privacy", "blind_hiring"];
 
@@ -28,7 +28,7 @@ export async function createScan(req: Request, res: Response, next: NextFunction
     const extractedText = await extractText(file.originalname, file.mimetype, file.buffer);
     const { findings, summary } = await analyzeText(extractedText, mode);
 
-    const session = createSession({
+    const session = await createSession({
       fileName: file.originalname,
       mode,
       extractedText,
@@ -52,20 +52,17 @@ export async function createScan(req: Request, res: Response, next: NextFunction
   }
 }
 
-export function updateFinding(req: Request, res: Response, next: NextFunction) {
+export async function updateFinding(req: Request, res: Response, next: NextFunction) {
   try {
     const scanId = req.params.scanId as string;
     const findingId = req.params.findingId as string;
-    const session = getSession(scanId);
-    const finding = session.findings.find((f) => f.findingId === findingId);
-    if (!finding) {
-      throw new ApiException(404, "SCAN_NOT_FOUND", "해당 항목을 찾을 수 없습니다.");
-    }
-
     const { action, replacementText, resolved } = req.body;
-    if (action) finding.action = action;
-    if (typeof replacementText === "string") finding.replacementText = replacementText;
-    if (typeof resolved === "boolean") finding.resolved = resolved;
+
+    const finding = await updateFindingInStore(scanId, findingId, {
+      action: typeof action === "string" ? (action as FindingAction) : undefined,
+      replacementText: typeof replacementText === "string" ? replacementText : undefined,
+      resolved: typeof resolved === "boolean" ? resolved : undefined,
+    });
 
     res.json({
       success: true,
@@ -83,7 +80,7 @@ export function updateFinding(req: Request, res: Response, next: NextFunction) {
 export async function createSafeCopy(req: Request, res: Response, next: NextFunction) {
   try {
     const scanId = req.params.scanId as string;
-    const session = getSession(scanId);
+    const session = await getSession(scanId);
     const format = (req.body.format ?? "txt") as "pdf" | "docx" | "txt";
 
     const maskedText = buildMaskedText(session);
@@ -111,11 +108,11 @@ export async function createSafeCopy(req: Request, res: Response, next: NextFunc
   }
 }
 
-export function removeScan(req: Request, res: Response, next: NextFunction) {
+export async function removeScan(req: Request, res: Response, next: NextFunction) {
   try {
     const scanId = req.params.scanId as string;
-    getSession(scanId); // 존재/만료 검증
-    deleteSession(scanId);
+    await getSession(scanId); // 존재/만료 검증
+    await deleteSession(scanId);
     res.json({ success: true, data: { scanId, deleted: true } });
   } catch (err) {
     next(err);

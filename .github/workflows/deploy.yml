@@ -29,6 +29,8 @@ jobs:
           WEBSERVER_HOST_1: ${{ secrets.WEBSERVER_HOST }}
           WEBSERVER_HOST_2: ${{ secrets.WEBSERVER_2_HOST }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           DEPLOY_SCRIPT='set -e
           REPO_DIR=~/markit-server
@@ -39,11 +41,14 @@ jobs:
           fi
           cd "$REPO_DIR"
           [ -f .env ] || cp .env.example .env
-          if grep -q "^GROQ_API_KEY=" .env; then
-            sed -i "s|^GROQ_API_KEY=.*|GROQ_API_KEY=__GROQ_API_KEY__|" .env
-          else
-            echo "GROQ_API_KEY=__GROQ_API_KEY__" >> .env
-          fi
+          set_env_var() {
+            grep -v "^$1=" .env > .env.tmp 2>/dev/null || true
+            mv .env.tmp .env
+            echo "$1=$2" >> .env
+          }
+          set_env_var GROQ_API_KEY '"'"'__GROQ_API_KEY__'"'"'
+          set_env_var DB_HOST '"'"'__DB_HOST__'"'"'
+          set_env_var DB_PASSWORD '"'"'__DB_PASSWORD__'"'"'
           npm ci
           npm run build
           if npx pm2 describe maskit-api > /dev/null 2>&1; then
@@ -56,8 +61,13 @@ jobs:
           APP_PORT=$(grep "^PORT=" .env | cut -d= -f2)
           curl -sf "http://localhost:${APP_PORT:-3000}/health"'
 
-          # 플레이스홀더를 실제 값으로 치환 (bash 파라미터 치환은 쉘 재해석 없이 순수 문자열 대입이라 키 값에 특수문자가 있어도 안전함)
-          DEPLOY_SCRIPT="${DEPLOY_SCRIPT//__GROQ_API_KEY__/$GROQ_API_KEY}"
+          # 시크릿 값을 작은따옴표로 감싼 자리에 넣을 것이므로, 값 안의 리터럴 작은따옴표만 이스케이프하면
+          # $, ", ` 등 다른 특수문자가 있어도 원격 셸에서 그대로 리터럴로 보존됨
+          sq_escape() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
+
+          DEPLOY_SCRIPT="${DEPLOY_SCRIPT//__GROQ_API_KEY__/$(sq_escape "$GROQ_API_KEY")}"
+          DEPLOY_SCRIPT="${DEPLOY_SCRIPT//__DB_HOST__/$(sq_escape "$DB_HOST")}"
+          DEPLOY_SCRIPT="${DEPLOY_SCRIPT//__DB_PASSWORD__/$(sq_escape "$DB_PASSWORD")}"
 
           ENCODED=$(printf '%s' "$DEPLOY_SCRIPT" | base64 | tr -d '\n')
 
