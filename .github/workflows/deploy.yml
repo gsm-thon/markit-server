@@ -57,7 +57,9 @@ jobs:
             npx pm2 start dist/index.js --name maskit-api
           fi
           npx pm2 save
-          sleep 2
+          sleep 3
+          echo "--- recent maskit-api logs ---"
+          npx pm2 logs maskit-api --lines 30 --nostream || true
           APP_PORT=$(grep "^PORT=" .env | cut -d= -f2)
           curl -sf "http://localhost:${APP_PORT:-3000}/health"'
 
