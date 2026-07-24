@@ -11,6 +11,8 @@ import { openApiSpec } from "./openapi";
 export function createApp() {
   const app = express();
 
+  app.set("trust proxy", 1); // ALB가 앞단 프록시 1홉이므로, X-Forwarded-For의 첫 번째 값을 실제 클라이언트 IP로 신뢰
+
   app.use(helmet());
   app.use(cors({ origin: env.corsOrigin }));
   app.use(express.json());
