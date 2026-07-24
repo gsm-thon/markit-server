@@ -86,8 +86,9 @@ ${text}
 """`;
 }
 
-const MAX_RATE_LIMIT_RETRIES = 3;
+const MAX_RATE_LIMIT_RETRIES = 2;
 const BASE_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 4000; // Groq의 Retry-After가 길게 와도 이 값 이상 기다리지 않고 빠르게 429로 응답
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -113,12 +114,14 @@ async function callGroqWithRetry(prompt: string): Promise<Response> {
       return response;
     }
 
-    // Groq 무료 티어 분당 요청 제한(429)에 걸린 경우 - 일시적이므로 잠깐 대기 후 재시도
+    // Groq 무료 티어 분당 요청 제한(429)에 걸린 경우 - 일시적이므로 잠깐 대기 후 재시도.
+    // Retry-After를 존중하되, 응답이 너무 오래 걸리지 않도록 상한을 둔다.
     const retryAfterSeconds = Number(response.headers.get("retry-after"));
-    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-      ? retryAfterSeconds * 1000
-      : BASE_RETRY_DELAY_MS * 2 ** attempt;
-    await sleep(delayMs);
+    const suggestedDelayMs =
+      Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : BASE_RETRY_DELAY_MS * 2 ** attempt;
+    await sleep(Math.min(suggestedDelayMs, MAX_RETRY_DELAY_MS));
   }
 
   throw new Error("unreachable"); // 루프가 항상 return/throw로 끝나므로 도달 불가
