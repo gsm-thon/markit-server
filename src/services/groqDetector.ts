@@ -86,22 +86,51 @@ ${text}
 """`;
 }
 
+const MAX_RATE_LIMIT_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callGroqWithRetry(prompt: string): Promise<Response> {
+  for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.groqApiKey}`,
+      },
+      body: JSON.stringify({
+        model: env.groqModel,
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+      }),
+    });
+
+    if (response.status !== 429 || attempt === MAX_RATE_LIMIT_RETRIES) {
+      return response;
+    }
+
+    // Groq 무료 티어 분당 요청 제한(429)에 걸린 경우 - 일시적이므로 잠깐 대기 후 재시도
+    const retryAfterSeconds = Number(response.headers.get("retry-after"));
+    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? retryAfterSeconds * 1000
+      : BASE_RETRY_DELAY_MS * 2 ** attempt;
+    await sleep(delayMs);
+  }
+
+  throw new Error("unreachable"); // 루프가 항상 return/throw로 끝나므로 도달 불가
+}
+
 export async function detectWithGroq(text: string, mode: ScanMode): Promise<RawFinding[]> {
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.groqApiKey}`,
-    },
-    body: JSON.stringify({
-      model: env.groqModel,
-      messages: [{ role: "user", content: buildPrompt(text, mode) }],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-    }),
-  });
+  const response = await callGroqWithRetry(buildPrompt(text, mode));
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new ApiException(429, "ANALYSIS_FAILED", "AI 탐지 요청이 많아 일시적으로 제한되었습니다. 잠시 후 다시 시도해주세요.");
+    }
     throw new ApiException(500, "ANALYSIS_FAILED", `Groq 호출 실패: ${response.status}`);
   }
 
