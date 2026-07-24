@@ -22,6 +22,7 @@ export function createApp() {
       limit: 30,
       standardHeaders: true,
       legacyHeaders: false,
+      validate: false, // ALB가 X-Forwarded-For와 Forwarded 헤더를 함께 보내는 걸 이미 trust proxy로 의도적으로 처리 중 - 내부 휴리스틱 경고만 비활성화
     })
   );
 
