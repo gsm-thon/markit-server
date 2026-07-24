@@ -94,6 +94,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const MAX_JSON_VALIDATE_RETRIES = 1; // Groq 서버가 자체 JSON 모드 검증에 실패하는 경우(json_validate_failed) - 샘플링이 달라지면 성공할 수 있어 1회 재시도
+
 async function callGroqWithRetry(prompt: string): Promise<Response> {
   for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -140,29 +142,43 @@ async function callGroqWithRetry(prompt: string): Promise<Response> {
 }
 
 export async function detectWithGroq(text: string, mode: ScanMode): Promise<RawFinding[]> {
-  const response = await callGroqWithRetry(buildPrompt(text, mode));
+  let parsed: { findings?: GroqRawItem[] } | null = null;
 
-  if (!response.ok) {
-    if (response.status === 429) {
-      throw new ApiException(429, "ANALYSIS_FAILED", "AI 탐지 요청이 많아 일시적으로 제한되었습니다. 잠시 후 다시 시도해주세요.");
+  for (let attempt = 0; attempt <= MAX_JSON_VALIDATE_RETRIES; attempt++) {
+    const response = await callGroqWithRetry(buildPrompt(text, mode));
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw new ApiException(429, "ANALYSIS_FAILED", "AI 탐지 요청이 많아 일시적으로 제한되었습니다. 잠시 후 다시 시도해주세요.");
+      }
+      // Groq 서버 자체의 json_validate_failed 등 비정상 응답 - 마지막 시도가 아니면 재시도
+      console.warn(`Groq 호출 실패 (status ${response.status}), attempt ${attempt}`);
+      if (attempt < MAX_JSON_VALIDATE_RETRIES) continue;
+      console.error("Groq가 유효한 JSON을 생성하지 못해 AI 탐지를 건너뜁니다 (정규식 탐지만 적용됨).");
+      return [];
     }
-    throw new ApiException(500, "ANALYSIS_FAILED", `Groq 호출 실패: ${response.status}`);
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const rawText = payload.choices?.[0]?.message?.content;
+    if (!rawText) {
+      if (attempt < MAX_JSON_VALIDATE_RETRIES) continue;
+      console.error("Groq 응답에 content가 없어 AI 탐지를 건너뜁니다 (정규식 탐지만 적용됨).");
+      return [];
+    }
+
+    try {
+      parsed = JSON.parse(rawText);
+      break;
+    } catch {
+      if (attempt < MAX_JSON_VALIDATE_RETRIES) continue;
+      console.error("Groq 응답이 올바른 JSON이 아니어서 AI 탐지를 건너뜁니다 (정규식 탐지만 적용됨).");
+      return [];
+    }
   }
 
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const rawText = payload.choices?.[0]?.message?.content;
-  if (!rawText) {
-    throw new ApiException(500, "ANALYSIS_FAILED", "Groq 응답을 파싱할 수 없습니다.");
-  }
-
-  let parsed: { findings?: GroqRawItem[] };
-  try {
-    parsed = JSON.parse(rawText);
-  } catch {
-    throw new ApiException(500, "ANALYSIS_FAILED", "Groq 응답이 올바른 JSON이 아닙니다.");
-  }
+  if (!parsed) return [];
 
   const findings: RawFinding[] = [];
   const seenOffsets = new Set<string>();
